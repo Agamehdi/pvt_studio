@@ -28,6 +28,7 @@ from pvt_engine import (
     TEMPERATURE_UNITS,
     VISCOSITY_UNITS,
     Z_FACTOR_CORRELATIONS,
+    api_to_oil_input,
     api_to_sg_oil,
     bg_from_ft3_scf,
     calculate_black_oil_table,
@@ -35,11 +36,13 @@ from pvt_engine import (
     calculate_gas_table,
     cgr_from_stb_mmscf,
     cgr_to_stb_mmscf,
+    compressibility_from_per_psi,
     compressibility_to_per_psi,
     correlation_range_warnings,
     density_from_lbft3,
     format_output_table,
     gas_input_to_sg,
+    gas_sg_to_input,
     gor_from_scfstb,
     gor_to_scfstb,
     oil_input_to_api,
@@ -101,6 +104,40 @@ st.markdown(
 )
 
 
+def _convert_between_units(value: float, old_unit: str, new_unit: str, units: tuple[str, ...]) -> float:
+    """Preserve the physical quantity when a displayed unit is changed."""
+    if old_unit == new_unit:
+        return float(value)
+    if units == PRESSURE_UNITS:
+        return float(pressure_from_psia(pressure_to_psia(value, old_unit), new_unit))
+    if units == TEMPERATURE_UNITS:
+        return float(temperature_from_f(temperature_to_f(value, old_unit), new_unit))
+    if units == GOR_UNITS:
+        return float(gor_from_scfstb(gor_to_scfstb(value, old_unit), new_unit))
+    if units == COMPRESSIBILITY_UNITS:
+        base_value = compressibility_to_per_psi(value, old_unit)
+        return float(compressibility_from_per_psi(base_value, new_unit))
+    if units == VISCOSITY_UNITS:
+        return float(viscosity_from_cp(viscosity_to_cp(value, old_unit), new_unit))
+    if units == CGR_UNITS:
+        return float(cgr_from_stb_mmscf(cgr_to_stb_mmscf(value, old_unit), new_unit))
+    raise ValueError(f"Automatic conversion is not configured for {old_unit} → {new_unit}")
+
+
+def _on_numeric_unit_change(
+    value_key: str,
+    unit_key: str,
+    previous_unit_key: str,
+    units: tuple[str, ...],
+) -> None:
+    old_unit = st.session_state[previous_unit_key]
+    new_unit = st.session_state[unit_key]
+    st.session_state[value_key] = _convert_between_units(
+        float(st.session_state[value_key]), old_unit, new_unit, units
+    )
+    st.session_state[previous_unit_key] = new_unit
+
+
 def number_with_unit(
     label: str,
     value: float,
@@ -111,23 +148,50 @@ def number_with_unit(
     step: float | None = None,
     help_text: str | None = None,
 ) -> tuple[float, str]:
+    value_key = f"{key}_value"
+    unit_key = f"{key}_unit"
+    previous_unit_key = f"{key}_previous_unit"
+    if value_key not in st.session_state:
+        st.session_state[value_key] = float(value)
+    if unit_key not in st.session_state or st.session_state[unit_key] not in units:
+        st.session_state[unit_key] = default_unit
+    if previous_unit_key not in st.session_state:
+        st.session_state[previous_unit_key] = st.session_state[unit_key]
+
     col_value, col_unit = st.columns([2.0, 1.15], vertical_alignment="bottom")
-    kwargs: dict[str, object] = {"value": value, "key": f"{key}_value", "help": help_text}
+    kwargs: dict[str, object] = {
+        "key": value_key,
+        "help": help_text,
+        "format": "%.8g",
+    }
     if min_value is not None:
-        kwargs["min_value"] = min_value
+        kwargs["min_value"] = _convert_between_units(
+            float(min_value), default_unit, st.session_state[unit_key], units
+        )
     if step is not None:
-        kwargs["step"] = step
+        converted_zero = _convert_between_units(0.0, default_unit, st.session_state[unit_key], units)
+        converted_step = _convert_between_units(float(step), default_unit, st.session_state[unit_key], units)
+        kwargs["step"] = abs(converted_step - converted_zero)
     with col_value:
         entered = st.number_input(label, **kwargs)
     with col_unit:
         unit = st.selectbox(
             f"{label} unit",
             units,
-            index=units.index(default_unit),
-            key=f"{key}_unit",
+            key=unit_key,
             label_visibility="collapsed",
+            on_change=_on_numeric_unit_change,
+            args=(value_key, unit_key, previous_unit_key, units),
         )
     return float(entered), unit
+
+
+def _on_oil_basis_change(value_key: str, basis_key: str, previous_basis_key: str) -> None:
+    old_basis = st.session_state[previous_basis_key]
+    new_basis = st.session_state[basis_key]
+    api_value = oil_input_to_api(float(st.session_state[value_key]), old_basis)
+    st.session_state[value_key] = api_to_oil_input(api_value, new_basis)
+    st.session_state[previous_basis_key] = new_basis
 
 
 def oil_gravity_input(default_api: float = 35.0) -> tuple[float, str, float]:
@@ -137,31 +201,64 @@ def oil_gravity_input(default_api: float = 35.0) -> tuple[float, str, float]:
         "Stock-tank density (kg/m³)",
         "Stock-tank density (lb/ft³)",
     )
-    kind = st.selectbox("Oil gravity basis", kinds)
-    defaults = {
-        "API gravity (°API)": default_api,
-        "Oil specific gravity": api_to_sg_oil(default_api),
-        "Stock-tank density (kg/m³)": api_to_sg_oil(default_api) * 999.016,
-        "Stock-tank density (lb/ft³)": api_to_sg_oil(default_api) * 62.366,
-    }
+    value_key = "oil_gravity_value"
+    basis_key = "oil_gravity_basis"
+    previous_basis_key = "oil_gravity_previous_basis"
+    if value_key not in st.session_state:
+        st.session_state[value_key] = float(default_api)
+    if basis_key not in st.session_state or st.session_state[basis_key] not in kinds:
+        st.session_state[basis_key] = kinds[0]
+    if previous_basis_key not in st.session_state:
+        st.session_state[previous_basis_key] = st.session_state[basis_key]
+
+    kind = st.selectbox(
+        "Oil gravity basis",
+        kinds,
+        key=basis_key,
+        on_change=_on_oil_basis_change,
+        args=(value_key, basis_key, previous_basis_key),
+    )
     value = st.number_input(
         "Oil gravity / density",
-        value=float(defaults[kind]),
         min_value=0.01,
-        key=f"oil_gravity_value_{kind}",
+        key=value_key,
+        format="%.8g",
     )
     return float(value), kind, oil_input_to_api(float(value), kind)
 
 
+def _on_gas_basis_change(value_key: str, basis_key: str, previous_basis_key: str) -> None:
+    old_basis = st.session_state[previous_basis_key]
+    new_basis = st.session_state[basis_key]
+    gas_sg_value = gas_input_to_sg(float(st.session_state[value_key]), old_basis)
+    st.session_state[value_key] = gas_sg_to_input(gas_sg_value, new_basis)
+    st.session_state[previous_basis_key] = new_basis
+
+
 def gas_gravity_input(default_sg: float = 0.70) -> tuple[float, str, float]:
     kinds = ("Gas specific gravity (air=1)", "Molecular weight (g/mol)")
-    kind = st.selectbox("Gas gravity basis", kinds)
-    default = default_sg if kind == kinds[0] else default_sg * 28.967
+    value_key = "gas_gravity_value"
+    basis_key = "gas_gravity_basis"
+    previous_basis_key = "gas_gravity_previous_basis"
+    if value_key not in st.session_state:
+        st.session_state[value_key] = float(default_sg)
+    if basis_key not in st.session_state or st.session_state[basis_key] not in kinds:
+        st.session_state[basis_key] = kinds[0]
+    if previous_basis_key not in st.session_state:
+        st.session_state[previous_basis_key] = st.session_state[basis_key]
+
+    kind = st.selectbox(
+        "Gas gravity basis",
+        kinds,
+        key=basis_key,
+        on_change=_on_gas_basis_change,
+        args=(value_key, basis_key, previous_basis_key),
+    )
     value = st.number_input(
         "Gas gravity / molecular weight",
-        value=float(default),
         min_value=0.01,
-        key=f"gas_gravity_value_{kind}",
+        key=value_key,
+        format="%.8g",
     )
     return float(value), kind, gas_input_to_sg(float(value), kind)
 
@@ -279,6 +376,7 @@ with st.sidebar:
     st.header("Model setup")
     fluid = st.selectbox("Fluid system", ("Black Oil", "Dead Oil", "Dry Gas", "Wet Gas"))
     st.caption("All calculations are converted to oilfield units internally, then returned in your selected output units.")
+    st.caption("Changing an input unit automatically converts its current numerical value.")
 
     st.subheader("Pressure grid")
     pressure_unit_default = "psia"
@@ -302,6 +400,10 @@ with st.sidebar:
         output_viscosity_unit = st.selectbox("Viscosity", VISCOSITY_UNITS, index=0)
         output_density_unit = st.selectbox("Density", DENSITY_UNITS, index=0)
         output_compressibility_unit = st.selectbox("Compressibility", COMPRESSIBILITY_UNITS, index=0)
+
+    st.divider()
+    run_pvt = st.button("▶ Run PVT", type="primary", width="stretch")
+    st.caption("Change the inputs freely, then press Run PVT to calculate and refresh all results.")
 
 
 try:
@@ -498,6 +600,11 @@ with correlation_tab:
     else:
         ppc_corr = z_corr = "Not applicable"
         compare_z = False
+
+
+if not run_pvt:
+    st.info("Set or change the parameters, then click **Run PVT** in the sidebar to generate the curves and table.")
+    st.stop()
 
 
 try:
@@ -829,6 +936,7 @@ with data_tab:
         file_name=filename,
         mime="text/csv",
         type="primary",
+        on_click="ignore",
     )
     st.caption("The export uses UTF-8 with BOM for clean opening in Excel and includes fluid type and correlation names on every row.")
 

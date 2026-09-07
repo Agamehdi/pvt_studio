@@ -10,6 +10,8 @@ A Streamlit application for generating correlation-based PVT curves and CSV tabl
 ## Features
 
 - Independent unit selectors for pressure, temperature, GOR, compressibility, viscosity, density and gas FVF
+- Automatic value conversion when an input unit or gravity basis is changed, preserving the same physical quantity
+- Manual `Run PVT` workflow: edit any number of inputs first, then calculate once on demand
 - Oil input as API gravity, specific gravity, kg/m³ or lb/ft³
 - Gas input as specific gravity or molecular weight
 - Selectable oil correlations: Standing, Vasquez–Beggs, Beggs–Robinson, Beal and Chew–Connally
@@ -23,6 +25,8 @@ A Streamlit application for generating correlation-based PVT curves and CSV tabl
 ### Fastest option on Windows
 
 Double-click `run_windows.bat`. It creates a local environment, installs the required packages and opens the app.
+
+Inside the app, set the inputs and correlations and then click **Run PVT** in the left sidebar. Changing a unit automatically converts the current numerical value; it does not change the underlying physical input.
 
 ### Manual setup
 

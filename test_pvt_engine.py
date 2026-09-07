@@ -3,11 +3,15 @@ import numpy as np
 from pvt_engine import (
     GasOptions,
     OilOptions,
+    api_to_oil_input,
     bg_from_ft3_scf,
     calculate_black_oil_table,
     calculate_gas_table,
     gor_from_scfstb,
     gor_to_scfstb,
+    gas_input_to_sg,
+    gas_sg_to_input,
+    oil_input_to_api,
     pressure_from_psia,
     pressure_to_psia,
 )
@@ -15,12 +19,27 @@ from pvt_engine import (
 
 def test_unit_round_trips():
     pressures = np.array([14.6959488, 1000.0, 6000.0])
-    for unit in ("psia", "bar(a)", "kPa(a)", "MPa(a)"):
+    for unit in ("psia", "psig", "bar(a)", "bar(g)", "kPa(a)", "MPa(a)"):
         converted = pressure_from_psia(pressures, unit)
         assert np.allclose(pressure_to_psia(converted, unit), pressures)
 
     gor = np.array([0.0, 650.0, 1200.0])
     assert np.allclose(gor_to_scfstb(gor_from_scfstb(gor, "Sm³/Sm³"), "Sm³/Sm³"), gor)
+
+
+def test_gravity_basis_round_trips():
+    api = 35.0
+    for basis in (
+        "API gravity (°API)",
+        "Oil specific gravity",
+        "Stock-tank density (kg/m³)",
+        "Stock-tank density (lb/ft³)",
+    ):
+        assert np.isclose(oil_input_to_api(api_to_oil_input(api, basis), basis), api)
+
+    gas_sg = 0.70
+    for basis in ("Gas specific gravity (air=1)", "Molecular weight (g/mol)"):
+        assert np.isclose(gas_input_to_sg(gas_sg_to_input(gas_sg, basis), basis), gas_sg)
 
 
 def test_bg_conversion_uses_barrels():
@@ -59,4 +78,3 @@ def test_dry_gas_has_physical_outputs():
     assert table.rho_g_lbft3.iloc[0] < table.rho_g_lbft3.iloc[-1]
     assert (table.mu_g_cp > 0.0).all()
     assert (table.cg_per_psi > 0.0).all()
-

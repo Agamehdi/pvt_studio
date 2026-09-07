@@ -61,14 +61,18 @@ def pressure_from_psia(value: float | np.ndarray, unit: str) -> float | np.ndarr
     value = np.asarray(value, dtype=float)
     if unit == "psia":
         result = value
+    elif unit == "psig":
+        result = value - ATM_PSI
     elif unit == "bar(a)":
         result = value / PSI_PER_BAR
+    elif unit == "bar(g)":
+        result = value / PSI_PER_BAR - 1.01325
     elif unit == "kPa(a)":
         result = value / PSI_PER_KPA
     elif unit == "MPa(a)":
         result = value / PSI_PER_MPA
     else:
-        raise ValueError(f"Unsupported absolute pressure output unit: {unit}")
+        raise ValueError(f"Unsupported pressure unit: {unit}")
     return float(result) if result.ndim == 0 else result
 
 
@@ -224,11 +228,32 @@ def oil_input_to_api(value: float, kind: str) -> float:
     raise ValueError(f"Unsupported oil gravity input: {kind}")
 
 
+def api_to_oil_input(api: float, kind: str) -> float:
+    if kind == "API gravity (°API)":
+        return float(api)
+    oil_sg = api_to_sg_oil(api)
+    if kind == "Oil specific gravity":
+        return oil_sg
+    if kind == "Stock-tank density (kg/m³)":
+        return float(oil_sg * 999.016)
+    if kind == "Stock-tank density (lb/ft³)":
+        return float(oil_sg * 62.366)
+    raise ValueError(f"Unsupported oil gravity input: {kind}")
+
+
 def gas_input_to_sg(value: float, kind: str) -> float:
     if kind == "Gas specific gravity (air=1)":
         return float(value)
     if kind == "Molecular weight (g/mol)":
         return float(value / AIR_MW)
+    raise ValueError(f"Unsupported gas gravity input: {kind}")
+
+
+def gas_sg_to_input(gas_sg: float, kind: str) -> float:
+    if kind == "Gas specific gravity (air=1)":
+        return float(gas_sg)
+    if kind == "Molecular weight (g/mol)":
+        return float(gas_sg * AIR_MW)
     raise ValueError(f"Unsupported gas gravity input: {kind}")
 
 
