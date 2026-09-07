@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+from pvt_export import ECLIPSE_UNIT_SYSTEMS, build_ascii_export, build_eclipse_include
 from pvt_engine import (
     ABS_PRESSURE_UNITS,
     BG_UNITS,
@@ -365,7 +366,7 @@ st.markdown(
     """
     <div class="hero">
       <h1>PVT Studio</h1>
-      <p>Correlation-based fluid property generation • unit-aware inputs • interactive QA • CSV export</p>
+      <p>Correlation-based fluid property generation • unit-aware inputs • interactive QA • CSV, ASCII &amp; Eclipse export</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -400,6 +401,11 @@ with st.sidebar:
         output_viscosity_unit = st.selectbox("Viscosity", VISCOSITY_UNITS, index=0)
         output_density_unit = st.selectbox("Density", DENSITY_UNITS, index=0)
         output_compressibility_unit = st.selectbox("Compressibility", COMPRESSIBILITY_UNITS, index=0)
+        eclipse_unit_system = st.selectbox(
+            "Eclipse deck unit system",
+            ECLIPSE_UNIT_SYSTEMS,
+            help="The generated .INC file must use the same unit system as the parent Eclipse/OPM Flow deck.",
+        )
 
     st.divider()
     run_pvt = st.button("▶ Run PVT", type="primary", width="stretch")
@@ -739,7 +745,7 @@ else:
         metric_cols[4].metric("Dew point", f"{marker_x:,.1f} {output_pressure_unit}")
 
 
-plot_tab, data_tab, qa_tab = st.tabs(["Interactive curves", "PVT table & CSV", "Engineering QA"])
+plot_tab, data_tab, qa_tab = st.tabs(["Interactive curves", "PVT table & export", "Engineering QA"])
 
 with plot_tab:
     if fluid == "Black Oil":
@@ -929,16 +935,61 @@ with data_tab:
     }
     export_df = add_export_metadata(output_table, export_metadata)
     csv_bytes = export_df.to_csv(index=False, float_format="%.8g").encode("utf-8-sig")
-    filename = f"pvt_{fluid.lower().replace(' ', '_')}_{datetime.now(timezone.utc):%Y%m%d_%H%M}.csv"
-    st.download_button(
-        "Download PVT table as CSV",
-        data=csv_bytes,
-        file_name=filename,
-        mime="text/csv",
-        type="primary",
-        on_click="ignore",
+    ascii_bytes = build_ascii_export(output_table, export_metadata)
+    timestamp = f"{datetime.now(timezone.utc):%Y%m%d_%H%M}"
+    file_stem = f"pvt_{fluid.lower().replace(' ', '_')}_{timestamp}"
+
+    export_col1, export_col2, export_col3 = st.columns(3)
+    with export_col1:
+        st.download_button(
+            "Download CSV",
+            data=csv_bytes,
+            file_name=f"{file_stem}.csv",
+            mime="text/csv",
+            type="primary",
+            on_click="ignore",
+            width="stretch",
+        )
+    with export_col2:
+        st.download_button(
+            "Download ASCII",
+            data=ascii_bytes,
+            file_name=f"{file_stem}.txt",
+            mime="text/plain",
+            on_click="ignore",
+            width="stretch",
+        )
+    with export_col3:
+        try:
+            eclipse_bytes = build_eclipse_include(
+                fluid=fluid,
+                table=raw_table,
+                metadata=model_meta,
+                correlations=correlation_metadata,
+                unit_system=eclipse_unit_system,
+                cgr_stb_mmscf=cgr_stb_mmscf,
+                dew_point_psia=dew_point_psia,
+            )
+            st.download_button(
+                f"Download Eclipse ({eclipse_unit_system})",
+                data=eclipse_bytes,
+                file_name=f"{file_stem}_{eclipse_unit_system.lower()}.INC",
+                mime="text/plain",
+                on_click="ignore",
+                width="stretch",
+            )
+        except ValueError as exc:
+            st.warning(f"Eclipse export unavailable: {exc}")
+
+    st.caption(
+        "CSV is UTF-8 for Excel; ASCII is tab-delimited seven-bit text; Eclipse creates PROPS-section "
+        f"PVTO/PVDO/PVDG/PVTG include data in {eclipse_unit_system} units."
     )
-    st.caption("The export uses UTF-8 with BOM for clean opening in Excel and includes fluid type and correlation names on every row.")
+    if fluid == "Wet Gas":
+        st.warning(
+            "Wet-gas PVTG export is a constant-Rv screening table. It is syntactically structured for Eclipse/OPM Flow, "
+            "but must be calibrated or replaced with CVD/CCE laboratory data or a tuned EOS before simulation use."
+        )
 
 with qa_tab:
     warnings = correlation_range_warnings(fluid, raw_table, t_f, api, gas_sg)

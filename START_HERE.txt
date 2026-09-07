@@ -1,0 +1,13 @@
+PVT STUDIO - WINDOWS START
+==========================
+
+1. IMPORTANT: Right-click PVT_Studio_Streamlit.zip and choose "Extract All".
+2. Open the extracted pvt_studio folder.
+3. Double-click START_PVT_STUDIO.cmd.
+4. On the first run, wait while the required Python packages are installed.
+5. The browser opens automatically. Set inputs, then click "Run PVT".
+
+The launcher detects standard Python, the Windows py launcher, Anaconda, and
+Miniconda. If startup fails, keep the window open and review the logs folder.
+
+Do not run START_PVT_STUDIO.cmd directly inside the ZIP preview window.
