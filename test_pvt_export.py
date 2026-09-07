@@ -68,6 +68,19 @@ def test_black_oil_field_export_has_live_oil_and_gas_keywords(sample_tables):
     assert "-- Suggested TABDIMS capacity:" in text
     assert text.rstrip().endswith("/")
 
+    # Match the requested full/triangular PVTO layout: the first saturated Rs
+    # record continues with blank-Rs undersaturated pressure rows before '/'.
+    pvto_lines = text.split("\nPVTO\n", 1)[1].split("\nPVDG\n", 1)[0].splitlines()
+    data_lines = [line for line in pvto_lines if line.strip() and not line.startswith("--")]
+    first_record = data_lines[0].split()
+    first_undersaturated_record = data_lines[1].split()
+    assert len(first_record) == 4
+    assert len(first_undersaturated_record) == 3
+    assert not data_lines[0].rstrip().endswith("/")
+    assert float(first_undersaturated_record[0]) > float(first_record[1])
+    assert float(first_undersaturated_record[1]) < float(first_record[2])
+    assert float(first_undersaturated_record[2]) > float(first_record[3])
+
 
 def test_dead_oil_metric_export_converts_pressure(sample_tables):
     *_, dead, dead_meta = sample_tables
@@ -99,4 +112,3 @@ def test_pvto_explains_missing_saturated_range(sample_tables):
     above_pb = black[black["P_psia"] > black_meta["Pb_psia"]]
     with pytest.raises(ValueError, match="below bubble point"):
         build_eclipse_include("Black Oil", above_pb, black_meta, unit_system="FIELD")
-

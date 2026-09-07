@@ -14,7 +14,12 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-from pvt_engine import FT3_PER_BBL, PSI_PER_BAR, SCFSTB_TO_SM3SM3
+from pvt_engine import (
+    FT3_PER_BBL,
+    PSI_PER_BAR,
+    SCFSTB_TO_SM3SM3,
+    vasquez_beggs_undersat_viscosity,
+)
 
 
 ECLIPSE_UNIT_SYSTEMS = ("FIELD", "METRIC")
@@ -142,8 +147,10 @@ def _pvdg_lines(table: pd.DataFrame, units: Mapping[str, object]) -> list[str]:
     bg = units["bg"](gas["Bg_ft3_scf"].to_numpy())
     viscosity = gas["mu_g_cp"].to_numpy()
     lines = [
+        "-- Dry Gas PVT table",
+        "-- Keyword is PVDG",
         "PVDG",
-        "--       PRESSURE               BG          GAS_MU",
+        "--       PRESSURE       GAS FORMATION VOLUME FACTOR    GAS VISCOSITY",
         f"--       {units['pressure_label']:<15} {units['bg_label']:<15} CP",
     ]
     for index, values in enumerate(zip(pressure, bg, viscosity)):
@@ -155,8 +162,10 @@ def _pvdo_lines(table: pd.DataFrame, units: Mapping[str, object]) -> list[str]:
     oil = _sorted_finite_table(table, ("P_psia", "Bo_rb_stb", "mu_o_cp"))
     pressure = units["pressure"](oil["P_psia"].to_numpy())
     lines = [
+        "-- Oil PVT for dead oil",
+        "-- Keyword is PVDO",
         "PVDO",
-        "--       PRESSURE               BO          OIL_MU",
+        "--       PRESSURE       LIQUID FORMATION VOLUME FACTOR    OIL VISCOSITY",
         f"--       {units['pressure_label']:<15} {units['bo_label']:<15} CP",
     ]
     rows = zip(pressure, oil["Bo_rb_stb"].to_numpy(), oil["mu_o_cp"].to_numpy())
@@ -169,9 +178,9 @@ def _pvto_lines(
     table: pd.DataFrame,
     metadata: Mapping[str, object],
     units: Mapping[str, object],
-) -> tuple[list[str], int]:
+) -> tuple[list[str], int, int]:
     oil = _sorted_finite_table(table, ("P_psia", "Rs_scfstb", "Bo_rb_stb", "mu_o_cp"))
-    required_metadata = ("Pb_psia", "Rsb_scfstb", "Bo_at_Pb", "mu_at_Pb_cp")
+    required_metadata = ("Pb_psia", "Rsb_scfstb", "Bo_at_Pb", "mu_at_Pb_cp", "co_per_psi")
     missing = [name for name in required_metadata if name not in metadata]
     if missing:
         raise ValueError(f"Missing black-oil metadata for PVTO: {', '.join(missing)}")
@@ -180,6 +189,9 @@ def _pvto_lines(
     rsb = float(metadata["Rsb_scfstb"])
     bo_pb = float(metadata["Bo_at_Pb"])
     mu_pb = float(metadata["mu_at_Pb_cp"])
+    co_per_psi = float(metadata["co_per_psi"])
+    if not np.isfinite(co_per_psi) or co_per_psi < 0.0:
+        raise ValueError("PVTO export requires a finite, non-negative oil compressibility")
     tolerance = max(1.0e-7 * pb, 1.0e-7)
     saturated = oil[oil["P_psia"] < pb - tolerance].copy()
     if saturated.empty:
@@ -197,49 +209,55 @@ def _pvto_lines(
     pressure_convert = units["pressure"]
     rs_convert = units["rs"]
     lines = [
+        "-- Oil PVT for live oil",
+        "-- Keyword is PVTO",
         "PVTO",
-        "--            RS         PRESSURE               BO          OIL_MU",
+        "-- GAS TO LIQUID RATIO   PRESSURE       LIQUID FORMATION VOLUME FACTOR    OIL VISCOSITY",
         f"--       {units['rs_label']:<15} {units['pressure_label']:<15} {units['bo_label']:<15} CP",
     ]
-    for row in saturated.itertuples(index=False):
-        lines.append(
-            _deck_row(
-                (
-                    float(rs_convert(row.Rs_scfstb)),
-                    float(pressure_convert(row.P_psia)),
-                    float(row.Bo_rb_stb),
-                    float(row.mu_o_cp),
-                ),
-                terminate=True,
-            )
-        )
 
-    undersaturated = oil[oil["P_psia"] > pb + tolerance]
-    lines.append(
-        _deck_row(
-            (
-                float(rs_convert(rsb)),
-                float(pressure_convert(pb)),
-                bo_pb,
-                mu_pb,
-            ),
-            terminate=undersaturated.empty,
+    # The attached target layout is a full PVTO table: every saturated Rs row
+    # owns an undersaturated pressure sub-table extending to the largest model
+    # pressure.  Include the exact global bubble point as a shared pressure node
+    # even when it is not present in the user's regular pressure grid.
+    master_pressures = np.unique(np.append(oil["P_psia"].to_numpy(dtype=float), pb))
+    saturation_groups = [
+        (float(row.Rs_scfstb), float(row.P_psia), float(row.Bo_rb_stb), float(row.mu_o_cp))
+        for row in saturated.itertuples(index=False)
+    ]
+    saturation_groups.append((rsb, pb, bo_pb, mu_pb))
+
+    maximum_subtable_rows = 0
+    for rs_value, saturation_pressure, saturated_bo, saturated_mu in saturation_groups:
+        group_pressures = master_pressures[master_pressures >= saturation_pressure - tolerance]
+        group_pressures = group_pressures.copy()
+        group_pressures[np.abs(group_pressures - saturation_pressure) <= tolerance] = saturation_pressure
+        group_pressures = np.unique(np.insert(group_pressures, 0, saturation_pressure))
+        maximum_subtable_rows = max(maximum_subtable_rows, len(group_pressures))
+
+        delta_pressure = np.maximum(group_pressures - saturation_pressure, 0.0)
+        group_bo = saturated_bo * np.exp(-co_per_psi * delta_pressure)
+        group_mu = vasquez_beggs_undersat_viscosity(
+            saturated_mu,
+            group_pressures,
+            saturation_pressure,
         )
-    )
-    for index, row in enumerate(undersaturated.itertuples(index=False)):
-        lines.append(
-            _deck_row(
-                (
-                    None,
-                    float(pressure_convert(row.P_psia)),
-                    float(row.Bo_rb_stb),
-                    float(row.mu_o_cp),
-                ),
-                terminate=index == len(undersaturated) - 1,
+        for index, (pressure_value, bo_value, mu_value) in enumerate(
+            zip(group_pressures, group_bo, group_mu)
+        ):
+            lines.append(
+                _deck_row(
+                    (
+                        float(rs_convert(rs_value)) if index == 0 else None,
+                        float(pressure_convert(pressure_value)),
+                        float(bo_value),
+                        float(mu_value),
+                    ),
+                    terminate=index == len(group_pressures) - 1,
+                )
             )
-        )
     lines.append("/")
-    return lines, len(saturated) + 1
+    return lines, len(saturation_groups), maximum_subtable_rows
 
 
 def _pvtg_lines(
@@ -258,8 +276,10 @@ def _pvtg_lines(
         "-- WARNING: screening PVTG with constant Rv.",
         "-- It does not model retrograde condensate dropout or property dependence on Rv.",
         "-- Replace/calibrate with laboratory CVD/CCE data or a tuned EOS for simulation studies.",
+        "-- Gas PVT table for wet gas with vaporized oil",
+        "-- Keyword is PVTG",
         "PVTG",
-        "--       PRESSURE               RV               BG          GAS_MU",
+        "--       PRESSURE               RV       GAS FORMATION VOLUME FACTOR    GAS VISCOSITY",
         f"--       {units['pressure_label']:<15} {units['rv_label']:<15} {units['bg_label']:<15} CP",
     ]
     for p_value, bg_value, mu_value in zip(pressure, bg, viscosity):
@@ -288,10 +308,11 @@ def build_eclipse_include(
     row_count = len(table.drop_duplicates("P_psia")) if "P_psia" in table else len(table)
 
     if fluid == "Black Oil":
-        pvto, rs_count = _pvto_lines(table, metadata, units)
+        pvto, rs_count, pvto_pressure_count = _pvto_lines(table, metadata, units)
         lines.insert(
             5,
-            f"-- Suggested TABDIMS capacity: NPPVT >= {max(row_count, 2)}, NRPVT >= {max(rs_count, 2)}.",
+            f"-- Suggested TABDIMS capacity: NPPVT >= {max(row_count, pvto_pressure_count, 2)}, "
+            f"NRPVT >= {max(rs_count, 2)}.",
         )
         lines.extend(pvto)
         lines.append("")
@@ -315,4 +336,3 @@ def build_eclipse_include(
 
     text = "\n".join(lines).rstrip() + "\n"
     return text.encode("ascii")
-

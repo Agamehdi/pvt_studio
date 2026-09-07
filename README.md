@@ -85,6 +85,7 @@ The implementation also corrects two issues in the original prototype:
 - CSV repeats fluid and correlation metadata on every row and opens cleanly in Excel.
 - ASCII is seven-bit, tab-delimited text with metadata comment lines and units in the headers.
 - Eclipse `.INC` output contains PROPS-section PVT keywords for one PVT region. The parent deck must use the selected FIELD or METRIC unit system and provide sufficient `TABDIMS` capacity; suggested limits are written in the file comments.
+- Live-oil `PVTO` follows the full triangular layout: every saturated Rs record is followed by its own undersaturated pressure/Bo/viscosity sub-table up to the maximum pressure.
 - Black-oil PVTO needs at least one calculated pressure below bubble point. If the app warns that PVTO cannot be created, lower the minimum pressure and click **Run PVT** again.
 - Wet-gas `PVTG` is a constant-Rv screening table because the correlation workflow does not calculate retrograde liquid dropout or Rv-dependent properties. Calibrate/replace it with CVD/CCE laboratory data or a tuned EOS before simulation work.
 

@@ -658,6 +658,7 @@ def calculate_black_oil_table(
         "Bo_at_Pb": bo_pb,
         "mu_dead_cp": mu_dead,
         "mu_at_Pb_cp": mu_pb,
+        "co_per_psi": co_per_psi,
         "oil_sg": oil_sg,
     }
     return table, metadata
